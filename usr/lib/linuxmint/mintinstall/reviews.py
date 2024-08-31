@@ -3,16 +3,13 @@ import threading
 import json
 import requests
 import multiprocessing
-
 from pathlib import Path
-
 from gi.repository import GLib, GObject
-
 from misc import print_timing
 
 REVIEWS_CACHE = os.path.join(GLib.get_user_cache_dir(), "mintinstall", "reviews.json")
 
-class Review(object):
+class Review:
     def __init__(self, packagename, date, username, rating, comment):
         self.date = date
         self.packagename = packagename
@@ -21,7 +18,7 @@ class Review(object):
         self.comment = comment
 
     @classmethod
-    def from_json(cls, json_data:dict):
+    def from_json(cls, json_data: dict):
         return cls(**json_data)
 
 
@@ -35,85 +32,65 @@ class ReviewInfo:
         self.num_reviews = num_reviews
 
     def update_stats(self):
-        sum_rating = 0
+        sum_rating = sum(review.rating for review in self.reviews)
         self.num_reviews = len(self.reviews)
-        self.avg_rating = 0
-        for review in self.reviews:
-            sum_rating = sum_rating + review.rating
+        
         if self.num_reviews > 0:
-            self.avg_rating = round(float(sum_rating) / float(self.num_reviews), 1)
-            # establish a score based on a 10 votes sample
+            self.avg_rating = round(sum_rating / self.num_reviews, 1)
             significant_votes = min(10, self.num_reviews)
             missing_votes = 10 - significant_votes
-            # assume votes voted like the avg, and missing votes vote 2.5 stars.
-            self.score = round((self.avg_rating*significant_votes+2.5*missing_votes)/10, 1)
+            self.score = round((self.avg_rating * significant_votes + 2.5 * missing_votes) / 10, 1)
         else:
             self.score = 0
 
     @classmethod
-    def from_json(cls, json_data:dict):
-        reviews = list(map(Review.from_json, json_data["reviews"]))
-        inst = cls(json_data["name"],
-                   json_data["score"],
-                   json_data["avg_rating"],
-                   json_data["num_reviews"])
-        inst.reviews = reviews
+    def from_json(cls, json_data: dict):
+        reviews = [Review.from_json(review) for review in json_data.get("reviews", [])]
+        instance = cls(json_data["name"], json_data["score"], json_data["avg_rating"], json_data["num_reviews"])
+        instance.reviews = reviews
+        return instance
 
-        return inst
 
-class JsonObject(object):
+class JsonObject:
     def __init__(self, cache, size):
-        super(JsonObject, self).__init__()
-
         self.cache = cache
         self.size = int(size)
 
     @classmethod
     def from_json(cls, json_data: dict):
-        new_dict = {}
-        for key in json_data["cache"].keys():
-            info_data = json_data["cache"][key]
-            new_dict[key] = ReviewInfo.from_json(info_data)
+        cache = {key: ReviewInfo.from_json(info) for key, info in json_data["cache"].items()}
+        return cls(cache, json_data["size"])
 
-        return cls(new_dict, json_data["size"])
 
 class ReviewCache(GObject.Object):
     __gsignals__ = {
         'reviews-updated': (GObject.SignalFlags.RUN_LAST, None, ()),
     }
+
     @print_timing
     def __init__(self):
-        GObject.Object.__init__(self)
-
+        super().__init__()
         self._cache_lock = threading.Lock()
-
         self._reviews, self._size = self._load_cache()
-
         self.proc = None
-
         self._update_cache()
 
     def kill(self):
-        try:
+        if self.proc is not None:
             self.proc.terminate()
             self.proc = None
-        except AttributeError as e:
-            pass
 
     def keys(self):
         with self._cache_lock:
-            return self._reviews.keys()
+            return list(self._reviews.keys())
 
     def values(self):
         with self._cache_lock:
-            return self._reviews.values()
+            return list(self._reviews.values())
 
     def __getitem__(self, key):
         with self._cache_lock:
-            try:
-                return self._reviews[key]
-            except KeyError:
-                return ReviewInfo(key)
+            return self._reviews.get(key, ReviewInfo(key))
 
     def __contains__(self, name):
         with self._cache_lock:
@@ -124,45 +101,25 @@ class ReviewCache(GObject.Object):
             return len(self._reviews)
 
     def _load_cache(self):
-        cache = None
-        size = 0
-
-        path = None
-
+        path = Path(REVIEWS_CACHE)
+        path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            path = Path(REVIEWS_CACHE)
-            path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            path = None
-        finally:
-            if path is not None:
-                try:
-                    with path.open(mode='r', encoding="utf8") as f:
-                        json_object = JsonObject.from_json(json.load(f))
-                        cache = json_object.cache
-                        size = json_object.size
-                except Exception as e:
-                    print("MintInstall: Cannot open reviews cache: %s" % str(e))
-                    cache = {}
-                    size = 0
-
-        return cache, size
+            with path.open(mode='r', encoding="utf8") as f:
+                json_object = JsonObject.from_json(json.load(f))
+                return json_object.cache, json_object.size
+        except Exception as e:
+            print(f"MintInstall: Cannot open reviews cache: {e}")
+            return {}, 0
 
     def _save_cache(self, cache, size):
-        path = None
-
-        try:
-            path = Path(REVIEWS_CACHE)
-            path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            path = None
-        finally:
+        path = Path(REVIEWS_CACHE)
+        with self._cache_lock:
             try:
                 with path.open(mode='w', encoding="utf8") as f:
                     pobj = JsonObject(cache, size)
                     json.dump(pobj, f, default=lambda o: o.__dict__, indent=4)
             except Exception as e:
-                print("MintInstall: Could not save review cache: %s" % str(e))
+                print(f"MintInstall: Could not save review cache: {e}")
 
     def _update_cache(self):
         thread = threading.Thread(target=self._update_reviews_thread)
@@ -170,18 +127,11 @@ class ReviewCache(GObject.Object):
 
     @print_timing
     def _update_reviews_thread(self):
-        # Update the review cache in a separate process.  Just doing it in a thread
-        # would end up blocking ui, due to the GIL problem.  But we can use this thread
-        # to monitor the Process and then reload the cache here once it terminates.
-
         success = multiprocessing.Value('b', False)
-
         current_size = multiprocessing.Value('d', self._size)
         self.proc = multiprocessing.Process(target=self._update_cache_process, args=(success, current_size))
         self.proc.start()
-
         self.proc.join()
-
         self.proc = None
 
         if success.value:
@@ -194,50 +144,34 @@ class ReviewCache(GObject.Object):
 
     def _update_cache_process(self, success, current_size):
         new_reviews = {}
-
         try:
             r = requests.head("https://community.linuxmint.com/data/new-reviews.list", timeout=10)
-
             if r.status_code == 200:
-                if int(r.headers.get("content-length")) != current_size.value:
-
+                if int(r.headers.get("content-length", 0)) != current_size.value:
                     r = requests.get("https://community.linuxmint.com/data/new-reviews.list", timeout=30)
-
                     last_package = None
-
                     for line in r.iter_lines():
                         decoded = line.decode()
-
                         elements = decoded.split("~~~")
                         if len(elements) == 5:
                             review = Review(elements[0], float(elements[1]), elements[2], elements[3], elements[4])
-                            if last_package is not None and last_package.name == elements[0]:
-                                #Comment is on the same package as previous comment.. no need to search for the package
+                            if last_package and last_package.name == elements[0]:
                                 last_package.reviews.append(review)
                             else:
-                                if last_package is not None:
+                                if last_package:
                                     last_package.update_stats()
-
-                                try:
-                                    package = new_reviews[elements[0]]
-                                except Exception:
-                                    package = ReviewInfo(elements[0])
-                                    new_reviews[elements[0]] = package
-
-                                last_package = package
-                                package.reviews.append(review)
-
-                    if last_package is not None:
+                                last_package = new_reviews.setdefault(elements[0], ReviewInfo(elements[0]))
+                                last_package.reviews.append(review)
+                    if last_package:
                         last_package.update_stats()
-
                     self._save_cache(new_reviews, r.headers.get("content-length"))
                     print("MintInstall: Downloaded new reviews")
                     success.value = True
                 else:
                     print("MintInstall: No new reviews")
             else:
-                print("MintInstall: Could not download updated reviews: %s" % r.reason)
+                print(f"MintInstall: Could not download updated reviews: {r.reason}")
                 success.value = False
         except Exception as e:
-            print("MintInstall: Problem attempting to access reviews url: %s" % str(e))
+            print(f"MintInstall: Problem attempting to access reviews URL: {e}")
 
