@@ -11,8 +11,8 @@ REVIEWS_CACHE = os.path.join(GLib.get_user_cache_dir(), "mintinstall", "reviews.
 
 class Review:
     def __init__(self, packagename, date, username, rating, comment):
-        self.date = date
         self.packagename = packagename
+        self.date = date
         self.username = username
         self.rating = int(rating)
         self.comment = comment
@@ -21,35 +21,36 @@ class Review:
     def from_json(cls, json_data: dict):
         return cls(**json_data)
 
-
 class ReviewInfo:
     def __init__(self, name, score=0, avg_rating=0, num_reviews=0):
         self.name = name
         self.reviews = []
-        self.categories = []
+        self.categories = []  # Bu hala boş kalıyor, potansiyel geliştirme için burada tutulabilir.
         self.score = score
         self.avg_rating = avg_rating
         self.num_reviews = num_reviews
 
     def update_stats(self):
-        sum_rating = sum(review.rating for review in self.reviews)
+        """Güncellemeler için istatistikleri yeniden hesaplar."""
         self.num_reviews = len(self.reviews)
-        
+        sum_rating = sum(review.rating for review in self.reviews)
+
         if self.num_reviews > 0:
             self.avg_rating = round(sum_rating / self.num_reviews, 1)
             significant_votes = min(10, self.num_reviews)
             missing_votes = 10 - significant_votes
+            # Ağırlıklı ortalama hesaplaması
             self.score = round((self.avg_rating * significant_votes + 2.5 * missing_votes) / 10, 1)
         else:
             self.score = 0
 
     @classmethod
     def from_json(cls, json_data: dict):
+        """ReviewInfo nesnesini JSON'dan oluşturur."""
         reviews = [Review.from_json(review) for review in json_data.get("reviews", [])]
         instance = cls(json_data["name"], json_data["score"], json_data["avg_rating"], json_data["num_reviews"])
         instance.reviews = reviews
         return instance
-
 
 class JsonObject:
     def __init__(self, cache, size):
@@ -58,9 +59,9 @@ class JsonObject:
 
     @classmethod
     def from_json(cls, json_data: dict):
+        """JSON'dan JsonObject nesnesi oluşturur."""
         cache = {key: ReviewInfo.from_json(info) for key, info in json_data["cache"].items()}
         return cls(cache, json_data["size"])
-
 
 class ReviewCache(GObject.Object):
     __gsignals__ = {
@@ -76,6 +77,7 @@ class ReviewCache(GObject.Object):
         self._update_cache()
 
     def kill(self):
+        """Çalışan işlem varsa sonlandırır."""
         if self.proc is not None:
             self.proc.terminate()
             self.proc = None
@@ -101,6 +103,7 @@ class ReviewCache(GObject.Object):
             return len(self._reviews)
 
     def _load_cache(self):
+        """Önbelleği diskteki dosyadan yükler."""
         path = Path(REVIEWS_CACHE)
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -112,6 +115,7 @@ class ReviewCache(GObject.Object):
             return {}, 0
 
     def _save_cache(self, cache, size):
+        """Önbelleği diske kaydeder."""
         path = Path(REVIEWS_CACHE)
         with self._cache_lock:
             try:
@@ -122,11 +126,13 @@ class ReviewCache(GObject.Object):
                 print(f"MintInstall: Could not save review cache: {e}")
 
     def _update_cache(self):
+        """Önbellek güncelleme işlemini başlatır."""
         thread = threading.Thread(target=self._update_reviews_thread)
         thread.start()
 
     @print_timing
     def _update_reviews_thread(self):
+        """Güncellemeyi arka planda yürütür."""
         success = multiprocessing.Value('b', False)
         current_size = multiprocessing.Value('d', self._size)
         self.proc = multiprocessing.Process(target=self._update_cache_process, args=(success, current_size))
@@ -140,21 +146,24 @@ class ReviewCache(GObject.Object):
                 GLib.idle_add(self.emit_reviews_updated)
 
     def emit_reviews_updated(self, data=None):
+        """Güncellemeyi diğer bileşenlere bildirir."""
         self.emit("reviews-updated")
 
     def _update_cache_process(self, success, current_size):
+        """İnternetten yeni incelemeleri indirir ve önbelleği günceller."""
         new_reviews = {}
         try:
             r = requests.head("https://community.linuxmint.com/data/new-reviews.list", timeout=10)
             if r.status_code == 200:
-                if int(r.headers.get("content-length", 0)) != current_size.value:
+                content_length = int(r.headers.get("content-length", 0))
+                if content_length != current_size.value:
                     r = requests.get("https://community.linuxmint.com/data/new-reviews.list", timeout=30)
                     last_package = None
                     for line in r.iter_lines():
                         decoded = line.decode()
                         elements = decoded.split("~~~")
                         if len(elements) == 5:
-                            review = Review(elements[0], float(elements[1]), elements[2], elements[3], elements[4])
+                            review = Review(elements[0], float(elements[1]), elements[2], int(elements[3]), elements[4])
                             if last_package and last_package.name == elements[0]:
                                 last_package.reviews.append(review)
                             else:
@@ -164,7 +173,7 @@ class ReviewCache(GObject.Object):
                                 last_package.reviews.append(review)
                     if last_package:
                         last_package.update_stats()
-                    self._save_cache(new_reviews, r.headers.get("content-length"))
+                    self._save_cache(new_reviews, content_length)
                     print("MintInstall: Downloaded new reviews")
                     success.value = True
                 else:
@@ -174,4 +183,3 @@ class ReviewCache(GObject.Object):
                 success.value = False
         except Exception as e:
             print(f"MintInstall: Problem attempting to access reviews URL: {e}")
-
