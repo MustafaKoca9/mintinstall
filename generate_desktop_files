@@ -1,18 +1,47 @@
 #!/usr/bin/python3
 
-DOMAIN = "mintinstall"
-PATH = "/usr/share/linuxmint/locale"
-
 import os
 import gettext
-import mintcommon.additionalfiles as additionalfiles
+from pathlib import Path
+from mintcommon import additionalfiles
 
-os.environ['LANGUAGE'] = "en_US.UTF-8"
-gettext.install(DOMAIN, PATH)
+# Constants
+DOMAIN = "mintinstall"
+LOCALE_PATH = "/usr/share/linuxmint/locale"
+LANGUAGE = "en_US.UTF-8"
+APPLICATIONS_DIR = "/usr/share/applications"
 
-prefix = "[Desktop Entry]\n"
+# Set environment variables for language
+os.environ['LANGUAGE'] = LANGUAGE
 
-suffix = """Exec=mintinstall
+# Setup gettext for localization
+def setup_localization(domain, locale_path):
+    """Sets up gettext for localization."""
+    try:
+        gettext.install(domain, locale_path)
+    except Exception as e:
+        raise RuntimeError(f"Failed to set up gettext. Ensure that the localization files exist at '{locale_path}' for the domain '{domain}'.") from e
+
+# Function to generate .desktop files
+def generate_desktop_file(filename, prefix, name, comment, suffix, generic_name=None):
+    """Generates a .desktop file with the given parameters."""
+    file_path = os.path.join(APPLICATIONS_DIR, filename)
+    try:
+        additionalfiles.generate(DOMAIN, LOCALE_PATH, file_path, prefix, name, comment, suffix, genericName=generic_name)
+        print(f"Successfully generated: {file_path}")
+    except Exception as e:
+        print(f"Failed to generate {file_path}: {e}")
+
+def main():
+    """Main function to generate .desktop files for mintinstall."""
+    # Localization setup
+    setup_localization(DOMAIN, LOCALE_PATH)
+
+    # Prefix for desktop entries
+    prefix = "[Desktop Entry]\n"
+
+    # Common suffix for mintinstall.desktop
+    general_suffix = """Exec=mintinstall
 Icon=mintinstall
 Terminal=false
 Type=Application
@@ -22,9 +51,8 @@ NotShowIn=KDE;
 StartupNotify=true
 """
 
-additionalfiles.generate(DOMAIN, PATH, "usr/share/applications/mintinstall.desktop", prefix, _("Software Manager"), _("Install new applications"), suffix)
-
-suffix = """Exec=mintinstall
+    # KDE-specific suffix
+    kde_suffix = """Exec=mintinstall
 Icon=software-properties-mint
 Terminal=false
 Type=Application
@@ -33,4 +61,24 @@ Categories=System;
 OnlyShowIn=KDE;
 """
 
-additionalfiles.generate(DOMAIN, PATH, "usr/share/applications/mintinstall-kde.desktop", prefix, _("Software Manager"), _("Install new applications"), suffix, genericName=_("Install new applications"))
+    # Generate the general desktop file
+    generate_desktop_file(
+        filename="mintinstall.desktop",
+        prefix=prefix,
+        name=_("Software Manager"),
+        comment=_("Install new applications"),
+        suffix=general_suffix
+    )
+
+    # Generate the KDE-specific desktop file
+    generate_desktop_file(
+        filename="mintinstall-kde.desktop",
+        prefix=prefix,
+        name=_("Software Manager"),
+        comment=_("Install new applications"),
+        suffix=kde_suffix,
+        generic_name=_("Install new applications")
+    )
+
+if __name__ == "__main__":
+    main()
