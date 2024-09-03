@@ -3,13 +3,10 @@
 import os
 import apt
 
-# Doğru yolu kontrol edin
 os.chdir("/usr/share/linuxmint/mintinstall/categories")
 
-# Paket önbelleğini yükleyin
 c = apt.Cache()
 
-# Kategorideki her dosya için işlemleri başlatın
 for file in os.listdir():
     new = []
     file_path = os.path.join(os.getcwd(), file)
@@ -24,6 +21,6 @@ for file in os.listdir():
                 else:
                     print(f"missing {pkg_name}")
     
-    # Değişiklikleri yazmak için dosyayı açın
+    
     with open(file_path, "w") as f:
         f.write("".join(new))
