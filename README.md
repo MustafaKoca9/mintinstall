@@ -2,7 +2,7 @@
 
 **Mintinstall**, Linux Mint için resmi Yazılım Yöneticisi uygulamasıdır. Bu uygulama, kullanıcıların yazılımları kolayca bulmasını, yüklemesini ve yönetmesini sağlar. Mintinstall, kullanıcı dostu arayüzü ve geniş yazılım yelpazesi ile Linux Mint topluluğu tarafından geniş çapta tercih edilmektedir.
 
-![Mintinstall Ekran Görüntüsü](https://user-images.githubusercontent.com/19881231/122644976-86767180-d120-11eb-9cf4-eed2813f749b.png)
+![Mintinstall Ekran Görüntüsü](Mintinstall.png)
 
 ## Özellikler
 
